@@ -268,62 +268,9 @@ class LDIPCR(object):
 
         return on_target
 
-    def add_break_info(self, aln):
-        """Accumulate breakpoint info from this alignment
-        
-        Arguments:
-        - `aln`:
-        """
-        import logging as log
-
-        import pysam
-        SAtag = aln.get_tag("SA")
-
-        aln_positions = parse_supplementary_alignments(SAtag)
-
-        this_position = SAtype(
-            self._inbam.getrname(aln.reference_id), aln.pos, "-"
-            if aln.is_reverse else '+', aln.cigarstring, aln.mapq,
-            aln.get_tag("NM"), aln.reference_end)
-
-        aln_positions.append(this_position)
-
-        # 10. Consider supplementary alignments with mapping quality of at least 10 (self._min_mapQ)
-
-        aln_positions = [x for x in aln_positions if x.mapQ >= self._min_mapQ]
-
-        aln_segments = []
-
-        for SA in aln_positions:
-            a = pysam.AlignedSegment()
-            a.reference_id = self._inbam.gettid(SA.rname)
-            a.flag = 0
-            a.flag = 16 if SA.strand == "-" else 0
-            a.seq = aln.seq
-            a.cigarstring = SA.CIGAR
-            a.reference_start = SA.pos
-            a.mapq = SA.mapQ
-
-            if a.mapq >= self._min_mapQ:
-                aln_segments.append(a)
-
-        alns_by_query_pos = []
-        seqLen = aln.infer_query_length()
-        for alns in aln_segments:
-            if alns.is_reverse:
-                sStart = seqLen - alns.qend
-                sEnd = seqLen - alns.qstart
-                x = sEnd
-                dx = sStart - sEnd
-            else:
-                sStart, sEnd = alns.qstart, alns.qend
-                x = sStart
-                dx = sEnd - sStart
-            alns_by_query_pos.append((x, alns))
-
-        alns_by_query_pos.sort()
-
+    def _find_read_breakpoints(self, alns_by_query_pos, seqLen, aln):
         # Previous alignment segment
+        import logging as log
         prev_alns = None
         aln_breaks = []
         for _, alns in alns_by_query_pos:
@@ -412,8 +359,65 @@ class LDIPCR(object):
                     aln_breaks.append(d)
                     pass
             prev_alns = alns
+        return aln_breaks
 
-        pass
+    def add_break_info(self, aln):
+        """Accumulate breakpoint info from this alignment
+        
+        Arguments:
+        - `aln`:
+        """
+        import logging as log
+
+        import pysam
+        SAtag = aln.get_tag("SA")
+
+        aln_positions = parse_supplementary_alignments(SAtag)
+
+        this_position = SAtype(
+            self._inbam.getrname(aln.reference_id), aln.pos, "-"
+            if aln.is_reverse else '+', aln.cigarstring, aln.mapq,
+            aln.get_tag("NM"), aln.reference_end)
+
+        aln_positions.append(this_position)
+
+        # 10. Consider supplementary alignments with mapping quality of at least 10 (self._min_mapQ)
+
+        aln_positions = [x for x in aln_positions if x.mapQ >= self._min_mapQ]
+
+        aln_segments = []
+
+        for SA in aln_positions:
+            a = pysam.AlignedSegment()
+            a.reference_id = self._inbam.gettid(SA.rname)
+            a.flag = 0
+            a.flag = 16 if SA.strand == "-" else 0
+            a.seq = aln.seq
+            a.cigarstring = SA.CIGAR
+            a.reference_start = SA.pos
+            a.mapq = SA.mapQ
+
+            if a.mapq >= self._min_mapQ:
+                aln_segments.append(a)
+
+        alns_by_query_pos = []
+        seqLen = aln.infer_query_length()
+        for alns in aln_segments:
+            if alns.is_reverse:
+                sStart = seqLen - alns.qend
+                sEnd = seqLen - alns.qstart
+                x = sEnd
+                dx = sStart - sEnd
+            else:
+                sStart, sEnd = alns.qstart, alns.qend
+                x = sStart
+                dx = sEnd - sStart
+            alns_by_query_pos.append((x, alns))
+
+        alns_by_query_pos.sort()
+
+        aln_breaks = self._find_read_breakpoints(alns_by_query_pos, seqLen,
+                                                 aln)
         self._break_support[aln.query_name] = aln_breaks
 
     def write_filtered(self, outputbam, filteredbam=None):
