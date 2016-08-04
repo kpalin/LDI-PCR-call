@@ -18,6 +18,9 @@ The overall strategy is:
 from collections import namedtuple
 SAtype = namedtuple("Alignment",
                     ["rname", "pos", "strand", "CIGAR", "mapQ", "NM", "epos"])
+READ_BREAK_type = namedtuple("ReadBreakPoint",
+                             ["qname", "chr3p", "pos3p", "insert_strand",
+                              "chr5p", "pos5p", "query_gap"])
 
 
 def main():
@@ -121,7 +124,12 @@ class LDIPCR(object):
     """Manage LDI PCR bams
     """
 
-    def __init__(self, inputbam, region, log_reasons=False):
+    def __init__(self,
+                 inputbam,
+                 region,
+                 log_reasons=False,
+                 min_mapQ=20.0,
+                 max_locus_size=1e5):
         """
 
         Arguments:
@@ -142,10 +150,11 @@ class LDIPCR(object):
 
         self._begin, self._end = map(int, pos.split("-"))
 
-        self._min_mapQ = 10.0
-        self._max_locus_size = 1e6
+        self._min_mapQ = min_mapQ
+        self._max_locus_size = max_locus_size
 
         self._break_support = {}
+        self._twin_primed_reads = set()
 
     def is_valid_LDI_read(self, aln):
         """Return True if, and only if, the input alignment is valid LDI-PCR read, 
@@ -273,6 +282,7 @@ class LDIPCR(object):
         import logging as log
         prev_alns = None
         aln_breaks = []
+
         for _, alns in alns_by_query_pos:
             source3p, source5p, source_query_end, source_query_start = [None
                                                                         ] * 4
@@ -286,6 +296,11 @@ class LDIPCR(object):
                     pass
                 elif self.on_target_region(prev_alns):
                     # Remain on target region
+                    if prev_alns.is_reverse != alns.is_reverse:
+                        #log.debug("{} appears twin primed.".format(
+                        #    aln.query_name))
+                        self._twin_primed_reads.add(aln.query_name)
+
                     pass
                 else:
                     # Break from alternative to target region !!REPORT""
@@ -310,13 +325,14 @@ class LDIPCR(object):
                     insert_strand = '+' if alns.is_reverse == prev_alns.is_reverse else '-'
 
                     query_gap = source_query_start - insert_query_end
-                    d = (aln.query_name, insert_chr, insert5p, insert_strand,
-                         self._chrom, source3p, query_gap)
+                    d = READ_BREAK_type(aln.query_name, insert_chr, insert5p,
+                                        insert_strand, self._chrom, source3p,
+                                        query_gap)
                     aln_breaks.append(d)
 
-                    log.debug("{}  {}:{:d}] {} [{}:{:d} (gap {:d})".format(
-                        aln.query_name, insert_chr, insert5p, insert_strand,
-                        self._chrom, source3p, query_gap))
+                    #log.debug("{}  {}:{:d}] {} [{}:{:d} (gap {:d})".format(
+                    #    aln.query_name, insert_chr, insert5p, insert_strand,
+                    #    self._chrom, source3p, query_gap))
                     pass
             else:
                 # We're on alternative region
@@ -351,11 +367,12 @@ class LDIPCR(object):
 
                     query_gap = source_query_end - insert_query_start
 
-                    log.debug("{}  {}:{:d}] {} [{}:{:d} (gap {:d})".format(
-                        aln.query_name, self._chrom, source3p, insert_strand,
-                        insert_chr, insert5p, query_gap))
-                    d = (aln.query_name, self._chrom, source3p, insert_strand,
-                         insert_chr, insert5p, query_gap)
+                    #log.debug("{}  {}:{:d}] {} [{}:{:d} (gap {:d})".format(
+                    #    aln.query_name, self._chrom, source3p, insert_strand,
+                    #    insert_chr, insert5p, query_gap))
+                    d = READ_BREAK_type(aln.query_name, self._chrom, source3p,
+                                        insert_strand, insert_chr, insert5p,
+                                        query_gap)
                     aln_breaks.append(d)
                     pass
             prev_alns = alns
@@ -418,7 +435,11 @@ class LDIPCR(object):
 
         aln_breaks = self._find_read_breakpoints(alns_by_query_pos, seqLen,
                                                  aln)
-        self._break_support[aln.query_name] = aln_breaks
+        if len(aln_breaks) > 2:
+            log.debug("Loads of breakpoints on {} {}".format(aln.query_name,
+                                                             str(aln_breaks)))
+        else:
+            self._break_support[aln.query_name] = aln_breaks
 
     def write_filtered(self, outputbam, filteredbam=None):
         """Write filtered reads to outputbam
@@ -448,9 +469,9 @@ class LDIPCR(object):
         out_count, filter_count = 0, 0
         for aln in self._inbam.fetch():
             if aln.qname in valid_reads:
-                if not aln.is_supplementary:
+                if not aln.is_supplementary:  # TODO: Get rid of this
                     self.add_break_info(aln)
-                #outbam.write(aln)
+                outbam.write(aln)
                 out_count += 1
             else:
                 if filtered_bam is not None:
@@ -464,6 +485,89 @@ class LDIPCR(object):
         if filtered_bam is not None:
             filtered_bam.close()
 
+    def call_insertions(self, gap_width=3000):
+        """
+        """
+        import logging as log
+        import itertools as it
+        from collections import defaultdict
+
+        bts_from_tgt = defaultdict(list)
+        bts_to_tgt = defaultdict(list)
+        for brk in it.chain(*self._break_support.itervalues()):
+            if brk.chr3p == self._chrom and brk.pos3p > self._begin and brk.pos3p < self._end:
+                # 3' end of the breakpoint is in the target hence the insertion comes from target
+                #bts_to_tgt[(brk.chr5p, brk.insert_strand)].append(brk.pos5p)
+                bts_to_tgt[brk.chr5p].append(brk.pos5p)
+            else:
+                bts_from_tgt[brk.chr3p].append(brk.pos3p)
+
+        # Find clusters of breakpoints
+
+        def _cluster_breakpoints(breakpoints):
+            from collections import defaultdict, Counter
+            ret = defaultdict(list)
+            for chrom, breaks in breakpoints.iteritems():
+                breaks.sort()
+                cluster_start = breaks[0]
+                point = cluster_start
+                breaks_in_cluster = 0
+                break_count = Counter()
+                for next_break_pos in breaks:
+                    if next_break_pos <= point + gap_width:  # More breakpoints in this cluster
+                        point = next_break_pos
+                        breaks_in_cluster += 1
+                        break_count[point] += 1
+                    else:
+                        log.debug("Cluster {}:{}-{}  len={}#  {}".format(
+                            chrom, cluster_start, point, point - cluster_start,
+                            breaks_in_cluster))
+                        ret[chrom].append(
+                            (cluster_start, point, breaks_in_cluster,
+                             break_count.most_common(1)[0][0]))
+                        breaks_in_cluster = 1
+                        cluster_start = next_break_pos
+                        point = next_break_pos
+
+                        break_count = Counter()
+                        break_count[point] += 1
+
+                if len(ret[chrom]) == 0 or ret[chrom][-1][0] != cluster_start:
+                    # Last breakpoint cluster
+                    ret[chrom].append((cluster_start, point, breaks_in_cluster,
+                                       break_count.most_common(1)[0][0]))
+
+                    log.debug("Cluster {}:{}-{}  len={}#  {}".format(
+                        chrom, cluster_start, point, point - cluster_start,
+                        breaks_in_cluster))
+
+            return ret
+
+        log.debug("Breakpoints from target")
+        from_tgt_clust = _cluster_breakpoints(bts_from_tgt)
+        log.debug("Breakpoints To target")
+        to_tgt_clust = _cluster_breakpoints(bts_to_tgt)
+
+        all_clust = defaultdict(list)
+        for chrom, clusts in from_tgt_clust.iteritems():
+            for c in clusts:
+                all_clusts[chrom].append(tuple(c[:2]))
+
+        merged_clusts = defaultdict(list)
+        for chrom, clusts in all_clusts.iteritems():
+            clusts.sort()
+            prev_clust = clusts[0]
+            for c in clusts:
+                if c[0] - prev_clust[1] < gap_width:
+                    prev_clust = prev_clust[0], c[1]
+                else:
+                    merged_clusts[chrom].append(prev_clust)
+                    prev_clust = c
+            merged_clusts[chrom].append(prev_clust)
+
+        return dict(from_tgt_clust), dict(to_tgt_clust), merged_clusts
+        pass
+
 
 if __name__ == '__main__':
     args = main()
@@ -473,7 +577,27 @@ if __name__ == '__main__':
 
     cmd.write_filtered(args.output, args.filtered)
     cmd.flush_reasons(args.reasons)
+    f, t = cmd.call_insertions()
+
+    o = open("insertion_sites.bed", "w")
+    STRAND = "."
+    for i, (CHR, CLUSTERS) in enumerate(f.iteritems()):
+        o.writelines("{}\t{}\t{}\tFROM\t{}\t{}\n".format(CHR, B, E + 1, STRAND,
+                                                         SCORE)
+                     for B, E, SCORE, MOST_LIKELY in CLUSTERS)
+        o.writelines("{}\t{}\t{}\tBEST\t{}\t{}\n".format(
+            CHR, MOST_LIKELY, MOST_LIKELY + 1, STRAND, SCORE)
+                     for B, E, SCORE, MOST_LIKELY in CLUSTERS)
+    for i, (CHR, CLUSTERS) in enumerate(t.iteritems()):
+        o.writelines("{}\t{}\t{}\tTO\t{}\t{}\n".format(CHR, B, E + 1, STRAND,
+                                                       SCORE)
+                     for B, E, SCORE, MOST_LIKELY in CLUSTERS)
+        o.writelines("{}\t{}\t{}\tBEST\t{}\t{}\n".format(
+            CHR, MOST_LIKELY, MOST_LIKELY + 1, STRAND, SCORE)
+                     for B, E, SCORE, MOST_LIKELY in CLUSTERS)
+    o.close()
+
     import itertools as it
     open("breaks.tsv", "w").writelines(
-        "\t".join(map(str, x)) + "\n"
-        for x in it.chain(*cmd._break_support.itervalues()))
+        "\t".join(map(str, x) + [str(x.qname in cmd._twin_primed_reads)]) +
+        "\n" for x in it.chain(*cmd._break_support.itervalues()))
