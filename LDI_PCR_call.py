@@ -283,6 +283,17 @@ class LDIPCR(object):
         prev_alns = None
         aln_breaks = []
 
+        is_twin_primed = False
+        for _, alns in alns_by_query_pos:
+            if prev_alns is not None and self.on_target_region(
+                    prev_alns) and self.on_target_region(alns):
+                if prev_alns.is_reverse != alns.is_reverse:
+                    self._twin_primed_reads.add(aln.query_name)
+                    is_twin_primed = True
+
+            prev_alns = alns
+
+        prev_alns = None
         for _, alns in alns_by_query_pos:
             source3p, source5p, source_query_end, source_query_start = [None
                                                                         ] * 4
@@ -290,43 +301,41 @@ class LDIPCR(object):
                 None
             ] * 5
             query_gap = None
+
             if self.on_target_region(alns):
                 if prev_alns is None:
                     # First segment on target
                     pass
                 elif self.on_target_region(prev_alns):
                     # Remain on target region
-                    if prev_alns.is_reverse != alns.is_reverse:
-                        #log.debug("{} appears twin primed.".format(
-                        #    aln.query_name))
-                        self._twin_primed_reads.add(aln.query_name)
-
                     pass
                 else:
                     # Break from alternative to target region !!REPORT""
                     #print "From  alt:", prev_alns
                     #print "To target:", alns
+                    # 3' end of the site on the chromosome where L1 was inserted
                     if prev_alns.is_reverse:
-                        insert5p = prev_alns.reference_start
+                        insert3p = prev_alns.reference_start
                         insert_query_end = seqLen - prev_alns.query_alignment_start
                     else:
-                        insert5p = prev_alns.reference_end
+                        insert3p = prev_alns.reference_end
                         insert_query_end = prev_alns.query_alignment_end
 
                     insert_chr = self._inbam.getrname(prev_alns.reference_id)
 
+                    # Position of the dangling 5' atom that is attached to the insertion site 3' atom.
                     if alns.is_reverse:
-                        source3p = alns.reference_end
+                        source5p = alns.reference_end
                         source_query_start = seqLen - alns.query_alignment_end
                     else:
-                        source3p = alns.reference_start
+                        source5p = alns.reference_start
                         source_query_start = alns.query_alignment_start
 
                     insert_strand = '+' if alns.is_reverse == prev_alns.is_reverse else '-'
 
                     query_gap = source_query_start - insert_query_end
-                    d = READ_BREAK_type(aln.query_name, insert_chr, insert5p,
-                                        insert_strand, self._chrom, source3p,
+                    d = READ_BREAK_type(aln.query_name, insert_chr, insert3p,
+                                        insert_strand, self._chrom, source5p,
                                         query_gap)
                     aln_breaks.append(d)
 
@@ -341,6 +350,8 @@ class LDIPCR(object):
                     pass
                 elif prev_alns.reference_id == alns.reference_id:
                     # Remain on the same alternative region, probably jumping to different strand due circularisation
+                    # TODO: Could try to infer Target Site duplication here!!
+                    # TODO: Could try to infer restriction cut sites here!!
                     pass
                 else:
                     assert self.on_target_region(prev_alns)
@@ -494,13 +505,16 @@ class LDIPCR(object):
 
         bts_from_tgt = defaultdict(list)
         bts_to_tgt = defaultdict(list)
+        bts_all = defaultdict(list)
         for brk in it.chain(*self._break_support.itervalues()):
             if brk.chr3p == self._chrom and brk.pos3p > self._begin and brk.pos3p < self._end:
                 # 3' end of the breakpoint is in the target hence the insertion comes from target
                 #bts_to_tgt[(brk.chr5p, brk.insert_strand)].append(brk.pos5p)
-                bts_to_tgt[brk.chr5p].append(brk.pos5p)
+                bts_to_tgt[brk.chr5p].append((brk.pos5p, brk.qname))
+                bts_all[brk.chr5p].append((brk.pos5p, brk.qname))
             else:
-                bts_from_tgt[brk.chr3p].append(brk.pos3p)
+                bts_from_tgt[brk.chr3p].append((brk.pos3p, brk.qname))
+                bts_all[brk.chr5p].append((brk.pos5p, brk.qname))
 
         # Find clusters of breakpoints
 
@@ -509,33 +523,37 @@ class LDIPCR(object):
             ret = defaultdict(list)
             for chrom, breaks in breakpoints.iteritems():
                 breaks.sort()
-                cluster_start = breaks[0]
+                cluster_start, _ = breaks[0]
                 point = cluster_start
                 breaks_in_cluster = 0
                 break_count = Counter()
-                for next_break_pos in breaks:
+                break_reads = set()
+                for next_break_pos, read in breaks:
                     if next_break_pos <= point + gap_width:  # More breakpoints in this cluster
                         point = next_break_pos
                         breaks_in_cluster += 1
                         break_count[point] += 1
+                        break_reads.add(read)
                     else:
                         log.debug("Cluster {}:{}-{}  len={}#  {}".format(
                             chrom, cluster_start, point, point - cluster_start,
                             breaks_in_cluster))
                         ret[chrom].append(
                             (cluster_start, point, breaks_in_cluster,
-                             break_count.most_common(1)[0][0]))
+                             break_count.most_common(1)[0][0], break_reads))
                         breaks_in_cluster = 1
                         cluster_start = next_break_pos
                         point = next_break_pos
 
                         break_count = Counter()
                         break_count[point] += 1
+                        break_reads = set([read])
 
                 if len(ret[chrom]) == 0 or ret[chrom][-1][0] != cluster_start:
                     # Last breakpoint cluster
                     ret[chrom].append((cluster_start, point, breaks_in_cluster,
-                                       break_count.most_common(1)[0][0]))
+                                       break_count.most_common(1)[0][
+                                           0], break_reads))
 
                     log.debug("Cluster {}:{}-{}  len={}#  {}".format(
                         chrom, cluster_start, point, point - cluster_start,
@@ -548,24 +566,25 @@ class LDIPCR(object):
         log.debug("Breakpoints To target")
         to_tgt_clust = _cluster_breakpoints(bts_to_tgt)
 
-        all_clust = defaultdict(list)
-        for chrom, clusts in from_tgt_clust.iteritems():
-            for c in clusts:
-                all_clusts[chrom].append(tuple(c[:2]))
+        all_clusts = _cluster_breakpoints(bts_all)
 
-        merged_clusts = defaultdict(list)
-        for chrom, clusts in all_clusts.iteritems():
-            clusts.sort()
-            prev_clust = clusts[0]
-            for c in clusts:
-                if c[0] - prev_clust[1] < gap_width:
-                    prev_clust = prev_clust[0], c[1]
-                else:
-                    merged_clusts[chrom].append(prev_clust)
-                    prev_clust = c
-            merged_clusts[chrom].append(prev_clust)
+        rclust = {}
+        for chrom, clusters in all_clusts.iteritems():
+            rclusts = []
+            #twin_primed = True
+            for clust in clusters:
+                if chrom == self._chrom and clust[3] < self._end and clust[
+                        3] >= self._begin:
+                    continue
 
-        return dict(from_tgt_clust), dict(to_tgt_clust), merged_clusts
+                twin_primed = clust[4].isdisjoint(
+                    self._twin_primed_reads) == False
+
+                rclusts.append(clust[:4] + (twin_primed, clust[4]))
+            rclust[chrom] = rclusts
+
+        all_clusts = rclust
+        return dict(from_tgt_clust), dict(to_tgt_clust), dict(all_clusts)
         pass
 
 
@@ -577,24 +596,15 @@ if __name__ == '__main__':
 
     cmd.write_filtered(args.output, args.filtered)
     cmd.flush_reasons(args.reasons)
-    f, t = cmd.call_insertions()
+    f, t, all_clusters = cmd.call_insertions()
 
     o = open("insertion_sites.bed", "w")
     STRAND = "."
-    for i, (CHR, CLUSTERS) in enumerate(f.iteritems()):
-        o.writelines("{}\t{}\t{}\tFROM\t{}\t{}\n".format(CHR, B, E + 1, STRAND,
-                                                         SCORE)
-                     for B, E, SCORE, MOST_LIKELY in CLUSTERS)
-        o.writelines("{}\t{}\t{}\tBEST\t{}\t{}\n".format(
-            CHR, MOST_LIKELY, MOST_LIKELY + 1, STRAND, SCORE)
-                     for B, E, SCORE, MOST_LIKELY in CLUSTERS)
-    for i, (CHR, CLUSTERS) in enumerate(t.iteritems()):
-        o.writelines("{}\t{}\t{}\tTO\t{}\t{}\n".format(CHR, B, E + 1, STRAND,
-                                                       SCORE)
-                     for B, E, SCORE, MOST_LIKELY in CLUSTERS)
-        o.writelines("{}\t{}\t{}\tBEST\t{}\t{}\n".format(
-            CHR, MOST_LIKELY, MOST_LIKELY + 1, STRAND, SCORE)
-                     for B, E, SCORE, MOST_LIKELY in CLUSTERS)
+    for i, (CHR, CLUSTERS) in enumerate(all_clusters.iteritems()):
+        o.writelines("{}\t{}\t{}\t{}\t{}\t{}\n".format(
+            CHR, MOST_LIKELY, MOST_LIKELY + 1, STRAND, "TwinPrimed" if
+            TWINPRIMED else "UnknownPriming", SCORE)
+                     for B, E, SCORE, MOST_LIKELY, TWINPRIMED, _ in CLUSTERS)
     o.close()
 
     import itertools as it
