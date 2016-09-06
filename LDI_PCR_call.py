@@ -514,7 +514,7 @@ class LDIPCR(object):
                 bts_all[brk.chr5p].append((brk.pos5p, brk.qname))
             else:
                 bts_from_tgt[brk.chr3p].append((brk.pos3p, brk.qname))
-                bts_all[brk.chr5p].append((brk.pos5p, brk.qname))
+                bts_all[brk.chr3p].append((brk.pos3p, brk.qname))
 
         # Find clusters of breakpoints
 
@@ -566,6 +566,7 @@ class LDIPCR(object):
         log.debug("Breakpoints To target")
         to_tgt_clust = _cluster_breakpoints(bts_to_tgt)
 
+        log.debug("All breakpoints")
         all_clusts = _cluster_breakpoints(bts_all)
 
         rclust = {}
