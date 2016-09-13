@@ -8,7 +8,7 @@ Implementing Long-Range Inverse PCR variant calling method for long read sequenc
 
 The overall strategy is:
 
-10. Consider supplementary alignments with mapping quality of at least 10
+10. Consider supplementary alignments with mapping quality of at least 20
 20. Discard all reads that do not have an alignment in the user given primer region
 30. Chain supplementary alignments consequtive in both read and genomic coordinates with approximately equal distances
 40. Cluster the reads with compatible/similar breakpoints and call the variants (i.e. breakpoints
@@ -31,7 +31,7 @@ def main():
 
 The overall strategy is:
 
-10. Consider supplementary alignments with mapping quality of at least 10
+10. Consider supplementary alignments with mapping quality of at least 20
 20. Discard all reads that do not have an alignment in the user given primer region
 30. Chain supplementary alignments consequtive in both read and genomic coordinates with approximately equal distances
 40. Cluster the reads with compatible/similar breakpoints and call the variants (i.e. breakpoints)
@@ -179,7 +179,7 @@ class LDIPCR(object):
 
         aln_positions.append(this_position)
 
-        # 10. Consider supplementary alignments with mapping quality of at least 10 (self._min_mapQ)
+        # 10. Consider supplementary alignments with mapping quality of at least (self._min_mapQ)
 
         aln_positions = [x for x in aln_positions if x.mapQ >= self._min_mapQ]
 
