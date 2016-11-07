@@ -18,16 +18,15 @@ The overall strategy is:
 from collections import namedtuple
 SAtype = namedtuple("Alignment",
                     ["rname", "pos", "strand", "CIGAR", "mapQ", "NM", "epos"])
-READ_BREAK_type = namedtuple("ReadBreakPoint",
-                             ["qname", "chr3p", "pos3p", "insert_strand",
-                              "chr5p", "pos5p", "query_gap"])
+READ_BREAK_type = namedtuple("ReadBreakPoint", [
+    "qname", "chr3p", "pos3p", "insert_strand", "chr5p", "pos5p", "query_gap"
+])
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(
-        description=
-        """Implementing Long-Range Inverse PCR variant calling method for long read sequencing (e.g. Oxford Nanopore)
+        description="""Implementing Long-Range Inverse PCR variant calling method for long read sequencing (e.g. Oxford Nanopore)
 
 The overall strategy is:
 
@@ -58,15 +57,15 @@ The overall strategy is:
         "-r",
         "--region",
         required=True,
-        help=
-        "Region of the LDI-PCR primers required for mapping [default:%(default)s]")
+        help="Region of the LDI-PCR primers required for mapping [default:%(default)s]"
+    )
 
     parser.add_argument(
         "-R",
         "--reasons",
         default=None,
-        help=
-        "For reads mapping to the target region, write read names, filtering decisions and reasons to this file [default:%(default)s]")
+        help="For reads mapping to the target region, write read names, filtering decisions and reasons to this file [default:%(default)s]"
+    )
 
     parser.add_argument(
         "-V",
@@ -74,8 +73,8 @@ The overall strategy is:
         default=False,
         const=True,
         nargs="?",
-        help=
-        "Be more verbose with output [and log to a file] [default:%(default)s]")
+        help="Be more verbose with output [and log to a file] [default:%(default)s]"
+    )
 
     args = parser.parse_args()
 
@@ -86,8 +85,8 @@ The overall strategy is:
             format='%(asctime)s:%(funcName)s:%(levelname)s:%(message)s')
         if args.verbose is not True:
             log_file_handler = logging.FileHandler(args.verbose)
-            log_file_handler.setFormatter(logging.getLogger().handlers[
-                0].formatter)
+            log_file_handler.setFormatter(logging.getLogger().handlers[0]
+                                          .formatter)
             logging.getLogger().addHandler(log_file_handler)
 
     logging.info(str(args))
@@ -156,6 +155,8 @@ class LDIPCR(object):
         self._break_support = {}
         self._twin_primed_reads = set()
 
+        self._valid_LDI_read_positions = {}
+
     def is_valid_LDI_read(self, aln):
         """Return True if, and only if, the input alignment is valid LDI-PCR read, 
 
@@ -188,20 +189,21 @@ class LDIPCR(object):
             return False
 
         # 20. Discard all reads that do not have an alignment in the user given primer region
-        # TODO: Be more exact on the regions. Now looking only beginning of the alignment
-        target_positions = [x
-                            for x in aln_positions
-                            if x.rname == self._chrom and x.pos <= self._end
-                            and x.pos >= self._begin]
+        target_positions = [
+            x for x in aln_positions
+            if x.rname == self._chrom and x.pos <= self._end and x.epos >=
+            self._begin
+        ]
 
         if len(target_positions) == 0:
             self.reason(aln.qname, "No mapping to target location")
             return False  # No mapping to target location
 
-        alt_positions = [x
-                         for x in aln_positions
-                         if not (x.rname == self._chrom and x.pos <= self._end
-                                 and x.pos >= self._begin)]
+        alt_positions = [
+            x for x in aln_positions
+            if not (x.rname == self._chrom and x.pos <= self._end and x.epos >=
+                    self._begin)
+        ]
 
         if len(alt_positions) == 0 and len(target_positions) >= 2:
             self.reason(aln.qname, "Native locus read with breaks.")
@@ -225,6 +227,9 @@ class LDIPCR(object):
             return False
 
         self.reason(aln.qname, "Valid LDI-PCR read", fail=False)
+
+        # For future use.
+        self._valid_LDI_read_positions[aln.qname] = aln_positions
 
         return True
 
@@ -551,9 +556,9 @@ class LDIPCR(object):
 
                 if len(ret[chrom]) == 0 or ret[chrom][-1][0] != cluster_start:
                     # Last breakpoint cluster
-                    ret[chrom].append((cluster_start, point, breaks_in_cluster,
-                                       break_count.most_common(1)[0][
-                                           0], break_reads))
+                    ret[chrom].append(
+                        (cluster_start, point, breaks_in_cluster,
+                         break_count.most_common(1)[0][0], break_reads))
 
                     log.debug("Cluster {}:{}-{}  len={}#  {}".format(
                         chrom, cluster_start, point, point - cluster_start,
@@ -574,41 +579,117 @@ class LDIPCR(object):
             rclusts = []
             #twin_primed = True
             for clust in clusters:
-                if chrom == self._chrom and clust[3] < self._end and clust[
-                        3] >= self._begin:
+                _, _, _, cluster_pos, cluster_reads = clust
+                if chrom == self._chrom and cluster_pos < self._end and cluster_pos >= self._begin:
                     continue
 
-                twin_primed = clust[4].isdisjoint(
-                    self._twin_primed_reads) == False
+                twin_primed = not cluster_reads.isdisjoint(
+                    self._twin_primed_reads)
 
-                rclusts.append(clust[:4] + (twin_primed, clust[4]))
+                target_site_dup = self._compute_tsd(cluster_reads)
+                insert_length = self._compute_insert_length(cluster_reads)
+
+                rclusts.append(clust[:4] + (twin_primed, target_site_dup,
+                                            insert_length, cluster_reads))
             rclust[chrom] = rclusts
 
         all_clusts = rclust
         return dict(from_tgt_clust), dict(to_tgt_clust), dict(all_clusts)
         pass
 
+    def _compute_tsd(self, reads):
+        """
+        Compute the size of the target site duplication. That is the overlapping alignment area in the insertion target
+        
+        Arguments:
+        - `reads`:
+        """
+        min5 = 1e10
+        max3 = 0
+
+        import itertools as it
+        overlaps = []
+        for r in reads:
+            aln_positions = self._valid_LDI_read_positions[r]
+            tgt_positions = [
+                x for x in aln_positions
+                if not (x.rname == self._chrom and x.pos <= self._end and
+                        x.epos >= self._begin)
+            ]
+            if len(tgt_positions) <= 1:
+                continue
+            for a, b in it.permutations(tgt_positions, 2):
+                if a.pos < b.pos and b.pos < a.epos:
+                    overlap = b.pos, a.epos
+                    overlaps.append(overlap)
+
+        if len(overlaps) == 0:
+            tsd_begin, tsd_end, tsd_length = 0, 0, 0
+        else:
+            tsd_begin = min(begin for begin, end in overlaps)
+            tsd_end = max(end for begin, end in overlaps)
+
+            tsd_length = tsd_end - tsd_begin + 1
+
+            if max(begin for begin, end in overlaps) > min(
+                    end for begin, end in overlaps):
+                import logging as log
+                log.warning(
+                    "Weird target site duplication which moves with different reads"
+                )
+
+        return tsd_length, tsd_begin, tsd_end
+
+    def _compute_insert_length(self, reads):
+        """Compute size of the insert from the primer sites. That is the maximum distance from 5' to 3' alignment
+        
+        Arguments:
+        - `reads`:
+        """
+        min5 = 1e10
+        max3 = 0
+        for r in reads:
+            aln_positions = self._valid_LDI_read_positions[r]
+            src_positions = [
+                x for x in aln_positions
+                if (x.rname == self._chrom and x.pos <= self._end and x.epos >=
+                    self._begin)
+            ]
+            min5 = min(min5, min(x.pos for x in src_positions))
+            max3 = max(max3, max(x.epos for x in src_positions))
+            insert_length = max3 - min5 + 1
+            assert insert_length > 0, "Weird non-positive width alignment for read {}".format(
+                r)
+
+        return insert_length, min5, max3
+
 
 if __name__ == '__main__':
     args = main()
-    cmd = LDIPCR(args.input[0],
-                 args.region,
-                 log_reasons=args.reasons is not None)
+    cmd = LDIPCR(
+        args.input[0], args.region, log_reasons=args.reasons is not None)
 
     cmd.write_filtered(args.output, args.filtered)
     cmd.flush_reasons(args.reasons)
     f, t, all_clusters = cmd.call_insertions()
 
-    o = open("insertion_sites.bed", "w")
+    o = open(args.output + ".insertion_sites.bed", "w")
+    o.write("\t".join([
+        "#CHR", "BEGIN", "END", "STRAND", "PRIMING", "SUPPORTING_READS",
+        "MAX_TSD", "MAX_INSERTED"
+    ]) + "\n")
     STRAND = "."
     for i, (CHR, CLUSTERS) in enumerate(all_clusters.iteritems()):
-        o.writelines("{}\t{}\t{}\t{}\t{}\t{}\n".format(
-            CHR, MOST_LIKELY, MOST_LIKELY + 1, STRAND, "TwinPrimed" if
-            TWINPRIMED else "UnknownPriming", SCORE)
-                     for B, E, SCORE, MOST_LIKELY, TWINPRIMED, _ in CLUSTERS)
+        o.writelines("{}\t{}\t{}\t{}\t{}\t{}\t{}:{}-{}\t{}:{}-{}\n".format(
+            CHR, MOST_LIKELY, MOST_LIKELY + 1, STRAND, "TwinPrimed"
+            if TWINPRIMED else "UnknownPriming", SCORE, CHR,
+            TARGET_SITE_DUP[1], TARGET_SITE_DUP[2], cmd._chrom,
+            INSERTION_LENGTH[1], INSERTION_LENGTH[2])
+                     for B, E, SCORE, MOST_LIKELY, TWINPRIMED, TARGET_SITE_DUP,
+                     INSERTION_LENGTH, READS in CLUSTERS)
     o.close()
 
     import itertools as it
-    open("breaks.tsv", "w").writelines(
+    open(args.output + ".breaks.tsv", "w").writelines(
         "\t".join(map(str, x) + [str(x.qname in cmd._twin_primed_reads)]) +
         "\n" for x in it.chain(*cmd._break_support.itervalues()))
