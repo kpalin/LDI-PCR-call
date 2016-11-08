@@ -344,10 +344,6 @@ class LDIPCR(object):
                                         query_gap)
                     aln_breaks.append(d)
 
-                    #log.debug("{}  {}:{:d}] {} [{}:{:d} (gap {:d})".format(
-                    #    aln.query_name, insert_chr, insert5p, insert_strand,
-                    #    self._chrom, source3p, query_gap))
-                    pass
             else:
                 # We're on alternative region
                 if prev_alns is None:
@@ -355,7 +351,6 @@ class LDIPCR(object):
                     pass
                 elif prev_alns.reference_id == alns.reference_id:
                     # Remain on the same alternative region, probably jumping to different strand due circularisation
-                    # TODO: Could try to infer Target Site duplication here!!
                     # TODO: Could try to infer restriction cut sites here!!
                     pass
                 else:
@@ -608,7 +603,10 @@ class LDIPCR(object):
         max3 = 0
 
         import itertools as it
+        from collections import Counter
         overlaps = []
+        overlapsc = Counter()
+        import logging as log
         for r in reads:
             aln_positions = self._valid_LDI_read_positions[r]
             tgt_positions = [
@@ -621,19 +619,20 @@ class LDIPCR(object):
             for a, b in it.permutations(tgt_positions, 2):
                 if a.pos < b.pos and b.pos < a.epos:
                     overlap = b.pos, a.epos
+                    overlapsc[overlap] += 1
                     overlaps.append(overlap)
-
         if len(overlaps) == 0:
             tsd_begin, tsd_end, tsd_length = 0, 0, 0
         else:
-            tsd_begin = min(begin for begin, end in overlaps)
-            tsd_end = max(end for begin, end in overlaps)
+            (tsd_begin, tsd_end), tsd_count = overlapsc.most_common(1)[0]
 
             tsd_length = tsd_end - tsd_begin + 1
 
+            log.info(
+                "Target site duplication {}:{}-{} of length {} bp supported by {} reads.".
+                format(a.rname, tsd_begin, tsd_end, tsd_length, tsd_count))
             if max(begin for begin, end in overlaps) > min(
                     end for begin, end in overlaps):
-                import logging as log
                 log.warning(
                     "Weird target site duplication which moves with different reads"
                 )
@@ -646,8 +645,10 @@ class LDIPCR(object):
         Arguments:
         - `reads`:
         """
-        min5 = 1e10
-        max3 = 0
+        import logging as log
+        from collections import Counter
+
+        insert_spans = Counter()
         for r in reads:
             aln_positions = self._valid_LDI_read_positions[r]
             src_positions = [
@@ -655,11 +656,19 @@ class LDIPCR(object):
                 if (x.rname == self._chrom and x.pos <= self._end and x.epos >=
                     self._begin)
             ]
-            min5 = min(min5, min(x.pos for x in src_positions))
-            max3 = max(max3, max(x.epos for x in src_positions))
+            min5 = min(x.pos for x in src_positions)
+            max3 = max(x.epos for x in src_positions)
+            insert_spans[(min5, max3)] += 1
+
             insert_length = max3 - min5 + 1
             assert insert_length > 0, "Weird non-positive width alignment for read {}".format(
                 r)
+
+        (min5, max3), insert_count = insert_spans.most_common(1)[0]
+
+        for (i5, i3), ic in insert_spans.most_common(10):
+            log.info("Insert {}-{} length {} with {} read supporting".format(
+                i5, i3, i3 - i5 + 1, ic))
 
         return insert_length, min5, max3
 
@@ -676,7 +685,7 @@ if __name__ == '__main__':
     o = open(args.output + ".insertion_sites.bed", "w")
     o.write("\t".join([
         "#CHR", "BEGIN", "END", "STRAND", "PRIMING", "SUPPORTING_READS",
-        "MAX_TSD", "MAX_INSERTED"
+        "EST_TSD", "EST_INSERTED"
     ]) + "\n")
     STRAND = "."
     for i, (CHR, CLUSTERS) in enumerate(all_clusters.iteritems()):
