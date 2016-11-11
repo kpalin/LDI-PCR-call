@@ -684,16 +684,16 @@ if __name__ == '__main__':
 
     o = open(args.output + ".insertion_sites.bed", "w")
     o.write("\t".join([
-        "#CHR", "BEGIN", "END", "STRAND", "PRIMING", "SUPPORTING_READS",
-        "EST_TSD", "EST_INSERTED"
+        "#CHR", "BEGIN", "END", "STRAND", "PRIMING", "SUPPORTING_BREAKS",
+        "EST_TSD", "EST_INSERTED", "SUPPORTING_READS"
     ]) + "\n")
     STRAND = "."
     for i, (CHR, CLUSTERS) in enumerate(all_clusters.iteritems()):
-        o.writelines("{}\t{}\t{}\t{}\t{}\t{}\t{}:{}-{}\t{}:{}-{}\n".format(
+        o.writelines("{}\t{}\t{}\t{}\t{}\t{}\t{}:{}-{}\t{}:{}-{}\t{}\n".format(
             CHR, MOST_LIKELY, MOST_LIKELY + 1, STRAND, "TwinPrimed"
             if TWINPRIMED else "UnknownPriming", SCORE, CHR,
             TARGET_SITE_DUP[1], TARGET_SITE_DUP[2], cmd._chrom,
-            INSERTION_LENGTH[1], INSERTION_LENGTH[2])
+            INSERTION_LENGTH[1], INSERTION_LENGTH[2], len(READS))
                      for B, E, SCORE, MOST_LIKELY, TWINPRIMED, TARGET_SITE_DUP,
                      INSERTION_LENGTH, READS in CLUSTERS)
     o.close()
