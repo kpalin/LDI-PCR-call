@@ -233,7 +233,8 @@ class LDIPCR(object):
 
         return True
 
-    def iter_LDI_reads(self, ):
+    def iter_LDI_reads(
+            self, ):
         """Return iterator (generator) over valid LDI-PCR alignments
         """
         alnIt = self._inbam.fetch(region=self._region)
@@ -316,8 +317,8 @@ class LDIPCR(object):
                     pass
                 else:
                     # Break from alternative to target region !!REPORT""
-                    #print "From  alt:", prev_alns
-                    #print "To target:", alns
+                    #print "From  alt:", str(prev_alns)[:300]
+                    #print "To target:", str(alns)[:300]
                     # 3' end of the site on the chromosome where L1 was inserted
                     if prev_alns.is_reverse:
                         insert3p = prev_alns.reference_start
@@ -342,6 +343,7 @@ class LDIPCR(object):
                     d = READ_BREAK_type(aln.query_name, insert_chr, insert3p,
                                         insert_strand, self._chrom, source5p,
                                         query_gap)
+
                     aln_breaks.append(d)
 
             else:
@@ -434,12 +436,13 @@ class LDIPCR(object):
             if alns.is_reverse:
                 sStart = seqLen - alns.qend
                 sEnd = seqLen - alns.qstart
-                x = sEnd
+                x = sStart
                 dx = sStart - sEnd
             else:
                 sStart, sEnd = alns.qstart, alns.qend
                 x = sStart
                 dx = sEnd - sStart
+
             alns_by_query_pos.append((x, alns))
 
         alns_by_query_pos.sort()
