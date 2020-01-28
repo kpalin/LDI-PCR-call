@@ -14,7 +14,7 @@ The overall strategy is:
 40. Cluster the reads with compatible/similar breakpoints and call the variants (i.e. breakpoints
 
 """
-
+from __future__ import print_function
 from collections import namedtuple
 SAtype = namedtuple("Alignment",
                     ["rname", "pos", "strand", "CIGAR", "mapQ", "NM", "epos"])
@@ -22,6 +22,14 @@ READ_BREAK_type = namedtuple("ReadBreakPoint", [
     "qname", "chr3p", "pos3p", "insert_strand", "chr5p", "pos5p", "query_gap"
 ])
 
+
+try:
+    import pysam
+    del(pysam)
+except ImportError as e:
+    import sys
+    sys.stderr.write("This requires pysam!!  Do install it.\nEither 'conda install pysam' or 'pip install --user pysam' should do the trick!\n")
+    sys.exit(1)
 
 def main():
     import argparse
@@ -99,7 +107,7 @@ def parse_supplementary_alignments(SAtag):
     import pysam
     for SA in SAtag.rstrip(";").split(";"):
         p = SA.split(",")
-        p[1] = long(p[1])
+        p[1] = int(p[1])
         p[4] = int(p[4])
         p[5] = int(p[5])
 
@@ -147,7 +155,7 @@ class LDIPCR(object):
         chrom, pos = region.split(":")
         self._chrom = chrom
 
-        self._begin, self._end = map(int, pos.split("-"))
+        self._begin, self._end = list(map(int, pos.split("-")))
 
         self._min_mapQ = min_mapQ
         self._max_locus_size = max_locus_size
@@ -252,7 +260,7 @@ class LDIPCR(object):
         if reasons is not None and self._log_reasons:
             reasons_file = open(reasons, "w")
             reasons_file.write("read\tfiltered\treason\n")
-            reasons_file.writelines(self._reasons.itervalues())
+            reasons_file.writelines(iter(self._reasons.values()))
             reasons_file.close()
 
     def reason(self, read_name, reason, fail=True):
@@ -509,7 +517,7 @@ class LDIPCR(object):
         bts_from_tgt = defaultdict(list)
         bts_to_tgt = defaultdict(list)
         bts_all = defaultdict(list)
-        for brk in it.chain(*self._break_support.itervalues()):
+        for brk in it.chain(*iter(self._break_support.values())):
             if brk.chr3p == self._chrom and brk.pos3p > self._begin and brk.pos3p < self._end:
                 # 3' end of the breakpoint is in the target hence the insertion comes from target
                 #bts_to_tgt[(brk.chr5p, brk.insert_strand)].append(brk.pos5p)
@@ -524,7 +532,7 @@ class LDIPCR(object):
         def _cluster_breakpoints(breakpoints):
             from collections import defaultdict, Counter
             ret = defaultdict(list)
-            for chrom, breaks in breakpoints.iteritems():
+            for chrom, breaks in breakpoints.items():
                 breaks.sort()
                 cluster_start, _ = breaks[0]
                 point = cluster_start
@@ -573,7 +581,7 @@ class LDIPCR(object):
         all_clusts = _cluster_breakpoints(bts_all)
 
         rclust = {}
-        for chrom, clusters in all_clusts.iteritems():
+        for chrom, clusters in all_clusts.items():
             rclusts = []
             #twin_primed = True
             for clust in clusters:
@@ -691,7 +699,7 @@ if __name__ == '__main__':
         "EST_TSD", "EST_INSERTED", "SUPPORTING_READS"
     ]) + "\n")
     STRAND = "."
-    for i, (CHR, CLUSTERS) in enumerate(all_clusters.iteritems()):
+    for i, (CHR, CLUSTERS) in enumerate(all_clusters.items()):
         o.writelines("{}\t{}\t{}\t{}\t{}\t{}\t{}:{}-{}\t{}:{}-{}\t{}\n".format(
             CHR, MOST_LIKELY, MOST_LIKELY + 1, STRAND, "TwinPrimed"
             if TWINPRIMED else "UnknownPriming", SCORE, CHR,
@@ -703,5 +711,5 @@ if __name__ == '__main__':
 
     import itertools as it
     open(args.output + ".breaks.tsv", "w").writelines(
-        "\t".join(map(str, x) + [str(x.qname in cmd._twin_primed_reads)]) +
-        "\n" for x in it.chain(*cmd._break_support.itervalues()))
+        "\t".join(list(map(str, x)) + [str(x.qname in cmd._twin_primed_reads)]) +
+        "\n" for x in it.chain(*iter(cmd._break_support.values())))

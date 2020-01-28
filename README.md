@@ -1,6 +1,8 @@
 # Software for calling insertions from long read sequenced LDI-PCR reads
 
-Implements method for calling genomic insertions from Long-Range Inverse PCR sequences as described in "“Detection and Analysis of Somatic LINE-1 Insertions in Colorectal Cancer by Long-distance Inverse-PCR and Nanopore Sequencing” by Pradhan et al. (Submitted)"
+Implements method for calling genomic insertions from Long-Range Inverse PCR sequences as described in "Pradhan, Barun, et al. "Detection of subclonal L1 transductions in colorectal cancer by long-distance inverse-PCR and Nanopore sequencing." Scientific reports 7.1 (2017): 1-12. <https://www.nature.com/articles/s41598-017-15076-3> 
+
+Dependencies for the software are python (2 or 3 series) and [pysam](https://pysam.readthedocs.io/en/latest/installation.html)
 
 
 	usage: LDI_PCR_call.py [-h] [-o OUTPUT] [-f FILTERED] -r REGION [-R REASONS]
