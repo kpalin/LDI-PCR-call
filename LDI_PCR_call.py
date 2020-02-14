@@ -65,7 +65,7 @@ The overall strategy is:
         "-r",
         "--region",
         required=True,
-        help="Region of the LDI-PCR primers required for mapping [default:%(default)s]"
+        help="Region of the LDI-PCR primers required for mapping, e.g. chr20:20000-30000 [default:%(default)s]"
     )
 
     parser.add_argument(
